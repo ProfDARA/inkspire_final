@@ -74,7 +74,7 @@ def load_t5(ckpt):
 # ===== Utils =====
 ID_STOP = set("yang dan di ke dari untuk pada dengan kepada sebagai adalah ialah yakni yaitu atau namun tetapi karena sehingga maka agar supaya sebuah para itu ini pun jika bila apabila saat ketika sementara selama hingga kemudian telah sudah akan".split())
 
-# ⬇⬇⬇ NEW: tokenization split — ML (tanpa angka) vs Paraphrase (jaga angka + unit)
+# token regexs
 ML_TOKEN_RE = re.compile(r"[A-Za-zÀ-ÿ]+", re.UNICODE)  # untuk fitur konteks (stabil seperti training)
 TOKEN_RE    = re.compile(r"""
     [A-Za-zÀ-ÿ]+(?:-[A-Za-zÀ-ÿ]+)*      # kata/istilah (boleh hyphen)
@@ -167,7 +167,7 @@ def categorize(val):
     if val >= 20: return "Sulit"
     return "Sangat Sulit"
 
-# ===== Paraphrase helpers =====
+# ===== Paraphrase helpers (adapted to accept keep_sentence flag) =====
 def make_bad_words_ids(tok):
     vocab = tok.get_vocab()
     ban = [
@@ -184,8 +184,6 @@ def make_bad_words_ids(tok):
         t = f"<extra_id_{i}>"
         if t in vocab: ids.append([vocab[t]])
     return ids
-
-
 
 def clean_once(s: str) -> str:
     s = re.sub(r"<extra_id_\d+>", "", s)
@@ -211,17 +209,21 @@ def too_similar(a: str, b: str, thr=0.92) -> bool:
     if not A or not B: return False
     return (len(A & B) / max(1, len(A | B))) >= thr
 
-def build_prompt(src: str, keep_terms=None, cap: int = 22) -> str:
+def build_prompt(src: str, keep_terms=None, cap: int = 22, keep_sentence: bool = False) -> str:
     keep = ", ".join(keep_terms or [])
-    return (
+    base = (
         f"paraphrase: {src} ||| "
         f"Constraints: satu kalimat Indonesia yang ringkas (≤{cap} kata), kalimat aktif, tetap ilmiah. "
         f"Keep:[{keep}]"
     )
+    if keep_sentence:
+        # Instruksi tambahan untuk mempertahankan sebagian struktur asli
+        base += " Pertahankan sebagian struktur dan makna kalimat asli."
+    return base
 
 @torch.no_grad()
-def generate_paraphrase(sent: str, keep_terms, t5_tok, t5_model, t5_device, cap=22, bad_ids=None):
-    prompt = build_prompt(sent, keep_terms, cap=cap)
+def generate_paraphrase(sent: str, keep_terms, t5_tok, t5_model, t5_device, cap=22, bad_ids=None, keep_sentence=False):
+    prompt = build_prompt(sent, keep_terms, cap=cap, keep_sentence=keep_sentence)
     enc = t5_tok([prompt], return_tensors="pt", truncation=True, max_length=448).to(t5_device)
 
     # deterministik dulu
@@ -256,16 +258,15 @@ def generate_paraphrase(sent: str, keep_terms, t5_tok, t5_model, t5_device, cap=
         txt = t5_tok.batch_decode(out, skip_special_tokens=True)[0]
         cand = hard_cap_words(clean_once(txt), cap)
 
-    # ⬇⬇⬇ NEW: fallback kalau kosong/terlalu pendek → kembalikan kalimat asli
+    # fallback kalau kosong/terlalu pendek → kembalikan kalimat asli
     if not cand or not cand.strip() or len(TOKEN_RE.findall(cand)) < 6:
         cand = sent.strip()
     return cand
 
 # ================== UI ==================
-st.title("Program Skoring keterbacaan dan Parafrase Bahasa Indonesia")
+st.title("Program Skoring Keterbacaan dan Parafrase Bahasa Indonesia")
 st.caption("Pipeline : IndoBERT (teks) + SBERT (konteks) + (opsional) POS → model keterbacaan. Parafrasa T5 opsional.")
 st.caption("Status Proyek : Eksperimental / Dalam Pengebangan")
-
 
 meta = load_meta()
 hf_model = meta["hf_model"]
@@ -281,6 +282,9 @@ with st.sidebar:
     use_paraphrase = st.checkbox("Aktifkan paraphrase T5", value=True)
     ckpt_path = st.text_input("Checkpoint T5", value="./indoT5-readability-lora-v2")
     max_words = st.slider("Batas kata output (parafrasa)", 16, 40, 30, 1)
+    st.markdown("### 🧙‍ Pertahankan Kalimat Aneh-Aneh")
+    keep_sentence_flag = st.checkbox("Pertahankan sebagian struktur kalimat asli", value=False)
+    st.markdown("_Prosesnya ajaib, ga usah mikir, cukup centang, klik proses dan lihat hasilnya!_")
     if use_paraphrase:
         try:
             t5_tok, t5_model, t5_dev = load_t5(ckpt_path)
@@ -291,7 +295,7 @@ with st.sidebar:
             st.error(f"Gagal load T5: {e}")
 
 st.subheader("Input Abstrak Penuh")
-abs_text = st.text_area("Input abstrak di sini", " Stunting merupakan bentuk kegagalan tumbuh dan berkembang yang menyebabkan ganguan pertumbuhan linear pada balita akibat ketidakcukupan nutrisi yang berlangsung lama yaitu 1000 hpk atau dari kehamilan sampai dengan bayi berusia dua tahun. Salah satu daerah yang angka stuntingnya cukup tinggi yaitu kabupaten temanggung, dimana angka stunting pada tahun 2021 mencapai 20,5% sedangkan target dari pemerintah daerah berdasarkan RPJMN 2020 -2024 adalah 14% sehingga melihat target tersebut, Kabupaten Temanggung memerlukan penanganan stunting dengan collaborative governance. Ringkasan dari penelitian ini menunjukkan bahwa collaborative governance dalam percepatan pencegahan stunting Di Kabupaten Temanggung berjalan dengan baik dan efektif. Hal ini berdasarkan analisis yang peneliti lakukan berdasarkan indikator dari middle teori Ansell and gash (2007) dan emerson, nabachi dan Balogh (2011) yaitu (1) kondisi awal dalam collaborative governance dibentuk berdasarkan Surat Keputusan Bupati Temanggung nomor 440/104 tahun 2021 tentang tim koordinasi dan kelompok kerja penanggulangan stunting Kabupaten Temanggung, dimana dalam collaborative governance terdiri dari Lembaga pemerintah, pihak swasta, organisasi masyarakat serta pihak kepentingan lainnya, serta dalam kondisi awal ini tidak ditemukannya aktor yang antagonis. (2) Desain kelembagaan yang digunakan adalah dengan berdasarkan Surat Keputusan Bupati Temanggung nomor 440/104 tahun 2021 tentang tim koordinasi dan kelompok kerja penanggulangan stunting Kabupaten Temanggung yang terdiri dari 1 tim koordinasi dan 5 kelompok kerja. (3) Kepemimpinan dalam collaborative governance ini dilaksanakan oleh Bappeda. Bappeda berperan sebagai fasilitator, koordinator, dan penggerak terhadap anggota tim koordinasi dan kelompok kerja. (4) Proses kolaborasi dilaksanakan melalui konvergensi stunting melalui tim koordinasi dan kelompok kerja, dimana dalam proses kolaborasi dilaksanakan melalui 8 aksi konvergensi dengan melaksanakan intervensi gizi spesifik dan intervensi gizi sensitive. Dalam proses kolaborasi ini, terdapat hasil sementara yang menunjukkan hasil yang baik yaitu dengan adanya penurunan angka stunting sebesar 2,9% dari 20,5% ke angka 17,60% dan komitmen antar anggota konvergensi untuk menangani stunting bersama â€“ sama", height=160)
+abs_text = st.text_area("Input abstrak di sini", "Mahasiswa sering menganggap skripsi sebagai tugas yang paling berat dan sulit karena harus melalui proses penelitian yang panjang dan membutuhkan usaha yang lebih besar daripada saat menyelesaikan tugas perkuliahan. Tidak jarang terdapat mahasiswa yang mengalami tekanan karena skripsi. Perasaan terbebani dan tidak mampu dalam proses pengerjaan skripsi sering kali menyebabkan mahasiswa merasakan stres akademik. Stres akademik yang dihadapi mahasiswa mampu memicu munculnya berbagai gangguan psikologis, salah satunya yaitu eating disorder atau gangguan makan. Penelitian ini ditujukan guna menganalisis korelasi antara stres akademik dengan kecenderungan gangguan pola makan pada mahasiswa Program Studi Pendidikan Bahasa Inggris di Universitas Negeri Yogyakarta yang sedang menyelesaikan skripsi. Penelitian ini memakai metode penelitian kuantitatif, serta teknik analisis data korelasi pearson. Hasil penelitian menunjukkan bahwasanya ada korelasi positif dan signifikan antara stress akademik dengan kecenderungan eating disorder pada mahasiswa Program Studi Pendidikan Bahasa Inggris yang sedang menyusun skripsi di Universitas Negeri Yogyakarta (0,000 0,005). Semakin tinggi tingkat stress akademik yang dialami, semakin tinggi juga mahasiswa memiliki kecenderungan untuk mengalami eating disorder.", height=160)
 
 if st.button("Proses"):
     # 1) Split per kalimat sederhana
@@ -319,7 +323,7 @@ if st.button("Proses"):
                 if len(w) >= 8 or re.match(r"^[A-Z][a-zA-Z\-]+$", w):
                     terms.append(w)
             terms = list(dict.fromkeys(terms))[:5]
-            para = generate_paraphrase(s, terms, t5_tok, t5_model, t5_dev, cap=max_words, bad_ids=BAD)
+            para = generate_paraphrase(s, terms, t5_tok, t5_model, t5_dev, cap=max_words, bad_ids=BAD, keep_sentence=keep_sentence_flag)
             if not para.strip():  # jaga-jaga
                 para = s.strip()
             paras.append(para)
@@ -332,28 +336,37 @@ if st.button("Proses"):
         df_in["Kategori (Parafrasa)"] = df_in["new_Flesch_Normalized"].apply(categorize)
         df_in["Parafrasa"] = paras
 
-    # 5) Mini dashboard metrik agregat
-    st.markdown("### Ringkasan Agregat")
+    # 5) Ringkasan Agregat — tampilkan semua skor dan delta
+    st.markdown("### 📊 Ringkasan Agregat")
+
     agg_orig = {t: df_in[f"old_{t}"].mean() for t in targets}
-    colA, colB, colC = st.columns(3)
-    with colA:
-        st.metric("Flesch (Asli)", f"{agg_orig['Flesch_Normalized']:.2f}", delta=None)
-        st.markdown(f"<span class='small'>Kategori: <b>{categorize(agg_orig['Flesch_Normalized'])}</b></span>", unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
     if use_paraphrase:
         agg_new = {t: df_in[f"new_{t}"].mean() for t in targets}
-        with colB:
-            st.metric("Flesch (Parafrasa)", f"{agg_new['Flesch_Normalized']:.2f}")
-            st.markdown(f"<span class='small'>Kategori: <b>{categorize(agg_new['Flesch_Normalized'])}</b></span>", unsafe_allow_html=True)
-            st.markdown("</div>", unsafe_allow_html=True)
-        with colC:
-            delta = agg_new['Flesch_Normalized'] - agg_orig['Flesch_Normalized']
-            st.metric("Δ Flesch", f"{delta:+.2f}")
-            st.markdown("<span class='small'>Rata-rata per kalimat</span>", unsafe_allow_html=True)
-            st.markdown("</div>", unsafe_allow_html=True)
+        deltas = {t: agg_new[t] - agg_orig[t] for t in targets}
+
+    cols = st.columns(len(targets))
+    for i, tgt in enumerate(targets):
+        with cols[i]:
+            if use_paraphrase:
+                st.metric(
+                    label=f"{tgt}",
+                    value=f"{agg_new[tgt]:.2f}",
+                    delta=f"{deltas[tgt]:+.2f}"
+                )
+                st.markdown(
+                    f"<span class='small'>Asli: {agg_orig[tgt]:.2f} — "
+                    f"Kategori baru: <b>{categorize(agg_new[tgt])}</b></span>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.metric(label=f"{tgt} (Asli)", value=f"{agg_orig[tgt]:.2f}")
+                st.markdown(
+                    f"<span class='small'>Kategori: <b>{categorize(agg_orig[tgt])}</b></span>",
+                    unsafe_allow_html=True,
+                )
 
     # 6) Tabel per kalimat
-    st.markdown("### Hasil per Kalimat")
+    st.markdown("### 🧾 Hasil per Kalimat")
     show_cols = [text_col]
     if use_paraphrase: show_cols += ["Parafrasa"]
     show_cols += [f"old_{t}" for t in targets]
@@ -367,7 +380,7 @@ if st.button("Proses"):
     pretty = {
         text_col: "Kalimat",
         **{f"old_{t}": f"{t} (Asli)" for t in targets},
-        **{f"new_{t}": f"{t} (Para)" for t in targets},
+        **{f"new_{t}": f"{t} (Parafrasa)" for t in targets},
         **{f"gain_{t}": f"Δ {t}" for t in targets},
     }
 
@@ -382,21 +395,12 @@ if st.button("Proses"):
         mime="text/csv"
     )
 
-    # 8) Gabungan paragraf (siap review & copy)
+    # 8) Gabungan paragraf — hanya versi parafrasa
     st.markdown("---")
-    st.subheader("Gabungan Paragraf Abstrak (Siap Review & Copy)")
+    st.subheader("📝 Gabungan Paragraf Abstrak (Siap Review & Copy)")
 
-    src_choice = "Parafrasa" if use_paraphrase else "Teks asli"
-    source = st.radio(
-        "Sumber gabungan",
-        options=["Parafrasa", "Teks asli"],
-        index=(0 if src_choice == "Parafrasa" else 1),
-        horizontal=True,
-    )
-
-    if use_paraphrase and source == "Parafrasa":
+    if use_paraphrase:
         seq = df_in.get("Parafrasa", pd.Series([], dtype=str)).fillna("").astype(str).tolist()
-        # fallback ke asli kalau ada yang kosong
         seq = [a if a.strip() else b for a, b in zip(seq, df_in[text_col].astype(str).tolist())]
     else:
         seq = df_in[text_col].fillna("").astype(str).tolist()
@@ -412,9 +416,9 @@ if st.button("Proses"):
     col_a, col_b = st.columns(2)
     with col_a:
         st.download_button(
-            "Download .TXT",
+            "💾 Download .TXT",
             data=joined.encode("utf-8"),
-            file_name=f"abstrak_{'parafrasa' if (use_paraphrase and source=='Parafrasa') else 'asli'}.txt",
+            file_name="abstrak_parafrasa.txt",
             mime="text/plain",
         )
     with col_b:
