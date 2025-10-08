@@ -25,11 +25,11 @@
   "rank_pattern": {},
   "revision": null,
   "target_modules": [
-    "wo",
-    "k",
-    "q",
-    "wi",
     "o",
+    "q",
+    "wi_0",
+    "wi_1",
+    "k",
     "v"
   ],
   "target_parameters": null,
