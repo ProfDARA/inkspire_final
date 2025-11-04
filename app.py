@@ -266,7 +266,7 @@ def generate_paraphrase(sent: str, keep_terms, t5_tok, t5_model, t5_device, cap=
 # ================== UI ==================
 st.title("Program Skoring Keterbacaan dan Parafrase Bahasa Indonesia")
 st.caption("Pipeline : IndoBERT (teks) + SBERT (konteks) + (opsional) POS → model keterbacaan. Parafrasa T5 opsional.")
-st.caption("Status Proyek : Eksperimental / Dalam Pengebangan")
+st.caption("Status Proyek : Eksperimental / Dalam Pengembangan")
 
 meta = load_meta()
 hf_model = meta["hf_model"]
